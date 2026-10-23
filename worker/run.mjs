@@ -109,10 +109,11 @@ const STEPS = {
     const seconds = Number(probe(file, ['-show_entries', 'format=duration'])), [width, height] = probe(file, ['-select_streams', 'v:0', '-show_entries', 'stream=width,height']).split(',').map(Number)
     await report(ID, { stage: 'upload', total: n, done: 0, note: `${(buf.length / 1048576).toFixed(1)} MB in ${n} piece${n === 1 ? '' : 's'}` })
     for (let i = 0; i < n; i++) {
-      await call(`/api/factory/upload?id=${ID}&n=${i}`, buf.subarray(i * size, (i + 1) * size), { raw: true })
+      await call(`/api/factory/upload?id=${ID}&n=${i}`, buf.subarray(i * size, (i + 1) * size), { raw: true, tries: 8,      // about 2 minutes of patience per piece
+        onRetry: (k, wait, why) => { log(`  piece ${i + 1}: the admin answered ${why}, trying again in ${wait / 1000}s`); return report(ID, { stage: 'upload', note: `piece ${i + 1} of ${n}: retrying (${k} of 7)` }) } })
       await report(ID, { done: i + 1 })
     }
-    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height })
+    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height }, { tries: 6 })
     log(`upload: ${n} piece${n === 1 ? '' : 's'}, ${buf.length} bytes, ${seconds.toFixed(1)}s, done`)
   },
 }
