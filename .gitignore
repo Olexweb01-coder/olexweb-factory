@@ -1,0 +1,10 @@
+node_modules/
+work/
+out/
+models/
+public/clip.mp4
+public/shot.png
+public/voice.wav
+public/music.wav
+public/sfx_*.wav
+src/timeline.json

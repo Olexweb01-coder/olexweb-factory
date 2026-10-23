@@ -1,0 +1,46 @@
+# Started by the Olexweb admin (never by hand needed): renders one approved script into a finished Short.
+# The only inputs are the script's number and the admin's address; nothing secret travels in them, because the
+# runs of a public repo are visible to anyone. The worker proves itself to the admin with the FACTORY_SECRET secret.
+name: render
+run-name: render video ${{ inputs.id }}
+on:
+  workflow_dispatch:
+    inputs:
+      id: { description: 'Script number', required: true }
+      api: { description: 'Admin address', required: true, default: 'https://olexweb.com' }
+concurrency: { group: render, cancel-in-progress: false }
+permissions: { contents: read }
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OLEX_API: ${{ inputs.api }}
+      FACTORY_SECRET: ${{ secrets.FACTORY_SECRET }}
+    steps:
+      - name: Only the Olexweb admin's address is accepted
+        run: |
+          case "$OLEX_API" in https://olexweb.com|https://www.olexweb.com) ;; *) echo "Refusing to talk to $OLEX_API"; exit 1;; esac
+          case "${{ inputs.id }}" in ''|*[!0-9]*) echo "Bad script number"; exit 1;; esac
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - name: Tell the admin we've started
+        run: node worker/hello.mjs "${{ inputs.id }}"
+      - name: Voice model (cached between runs)
+        uses: actions/cache@v4
+        with: { path: models, key: kokoro-v1.0-int8 }
+      - name: Download the voice model if it isn't cached
+        run: |
+          mkdir -p models
+          for f in kokoro-v1.0.int8.onnx voices-v1.0.bin; do
+            [ -s "models/$f" ] || curl -sSfL -o "models/$f" "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$f"
+          done
+      - name: Install
+        run: |
+          npm ci || npm install
+          npx playwright install --with-deps chromium
+          pip install --quiet kokoro-onnx==0.6.1 soundfile numpy scipy
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+      - name: Make the video
+        run: node worker/run.mjs --id "${{ inputs.id }}"

@@ -1,0 +1,16 @@
+{
+  "name": "olexweb-factory",
+  "private": true,
+  "type": "module",
+  "description": "Renders the Olexweb YouTube channel's videos. Started by the Olexweb admin; reports back to it.",
+  "scripts": { "render": "node worker/run.mjs" },
+  "dependencies": {
+    "@remotion/bundler": "4.0.300",
+    "@remotion/cli": "4.0.300",
+    "@remotion/renderer": "4.0.300",
+    "playwright": "1.56.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.300"
+  }
+}
