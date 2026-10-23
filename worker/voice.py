@@ -3,7 +3,7 @@
 import json, re, sys, numpy as np, soundfile as sf
 from kokoro_onnx import Kokoro
 job = json.load(open('work/job.json'))
-k = Kokoro('models/kokoro-v1.0.int8.onnx', 'models/voices-v1.0.bin')
+k = Kokoro('models/kokoro-v1.0.onnx', 'models/voices-v1.0.bin')   # full precision: the compact int8 model garbles some lines on some processors
 SR, GAP, FPS, LEAD = 24000, 0.18, 30, 0.25
 def trim(a, thr=0.01):
     idx = np.where(np.abs(a) > thr)[0]
@@ -13,9 +13,16 @@ parts, t, scenes = [np.zeros(int(SR * LEAD), dtype=np.float32)], LEAD, []
 voices = set(k.get_voices()) if hasattr(k, 'get_voices') else None
 voice = job.get('voice') or 'am_michael'
 if voices and voice not in voices: voice = 'am_michael'
+intro = (job.get('intro') or '').strip()                    # "Secret websites you should know, part 10." said first
 for i, sc in enumerate(job['scenes']):
-    a, sr = k.create(sc['text'], voice=voice, speed=1.12, lang='en-us'); a = trim(a.astype(np.float32))
-    d = len(a) / SR; words = sc['text'].split(); W = [weight(w) for w in words]; tot = sum(W) or 1; c = t; wt = []
+    said = (intro + ' ' + sc['text']).strip() if i == 0 and intro else sc['text']
+    for attempt in range(2):                                   # every line is checked: real length for its words, sane volume
+        a, sr = k.create(said, voice=voice, speed=1.12, lang='en-us'); a = a.astype(np.float32)
+        ok = len(a) > 0 and np.isfinite(a).all() and np.abs(a).max() < 2.0 and len(a) / SR >= 0.12 * len(said.split())
+        if ok: break
+    if not ok: sys.exit(f'the voice came out broken for scene {i + 1} ("{said[:50]}"), even after a second try')
+    a = trim(a)
+    d = len(a) / SR; words = said.split(); W = [weight(w) for w in words]; tot = sum(W) or 1; c = t; wt = []
     for w, x in zip(words, W): dur = d * x / tot; wt.append({'w': w, 's': round(c, 3), 'e': round(c + dur, 3)}); c += dur
     scenes.append({**sc, 'start': round(t, 3), 'end': round(t + d, 3), 'words': wt})
     parts += [a, np.zeros(int(SR * GAP), dtype=np.float32)]; t += d + GAP

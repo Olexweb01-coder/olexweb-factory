@@ -29,11 +29,11 @@ jobs:
         run: node worker/hello.mjs "${{ inputs.id }}"
       - name: Voice model (cached between runs)
         uses: actions/cache@v4
-        with: { path: models, key: kokoro-v1.0-int8 }
+        with: { path: models, key: kokoro-v1.0-full }
       - name: Download the voice model if it isn't cached
         run: |
           mkdir -p models
-          for f in kokoro-v1.0.int8.onnx voices-v1.0.bin; do
+          for f in kokoro-v1.0.onnx voices-v1.0.bin; do
             [ -s "models/$f" ] || curl -sSfL -o "models/$f" "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$f"
           done
       - name: Install

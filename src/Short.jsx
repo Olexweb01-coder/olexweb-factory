@@ -32,12 +32,21 @@ function Header({ frame, total }) {
   const series = String(TL.series || '').toUpperCase(), small = series.length > 22
   return (<>
     <div style={{ position: 'absolute', top: 0, left: 0, height: 10, width: `${(frame / total) * 100}%`, background: G }} />
-    <div style={{ position: 'absolute', top: 70, left: 30, right: 30, display: 'flex', justifyContent: 'center' }}>
+    <div style={{ position: 'absolute', top: 70, left: 30, right: 30, display: 'flex', justifyContent: 'center'}}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 30px', borderRadius: 999, background: 'rgba(255,255,255,0.07)', border: '2px solid rgba(255,255,255,0.14)', fontFamily: 'Hubot', fontWeight: 800, fontSize: small ? 30 : 38, color: INK, letterSpacing: 1, whiteSpace: 'nowrap' }}>
         <span style={{ color: G }}>●</span> {series} <span style={{ color: DIM }}>·</span> <span style={{ color: AMBER }}>PART {TL.part}</span>
       </div>
     </div>
+    <PartStamp frame={frame} />
   </>)
+}
+// The first second and a half: a big "PART 10" stamp, so returning viewers know the series at a glance.
+function PartStamp({ frame }) {
+  const { fps } = useVideoConfig(), s = pop(frame, fps, 0), out = interpolate(frame, [40, 52], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+  if (frame > 52 || !TL.part) return null
+  return <div style={{ position: 'absolute', top: 150, left: 0, right: 0, display: 'flex', justifyContent: 'center', opacity: out, zIndex: 5 }}>
+    <div style={{ transform: `scale(${0.5 + 0.5 * s}) rotate(${(1 - s) * -8 - 3}deg)`, padding: '18px 54px', borderRadius: 28, background: AMBER, color: '#1A1300', fontFamily: 'Hubot', fontWeight: 900, fontSize: 120, lineHeight: 1, boxShadow: '0 18px 0 rgba(0,0,0,0.35)' }}>PART {TL.part}</div>
+  </div>
 }
 function Browser({ children, frame, tilt = 0 }) {
   const { fps } = useVideoConfig(), s = pop(frame, fps, 0)

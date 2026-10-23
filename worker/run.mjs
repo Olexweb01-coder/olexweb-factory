@@ -75,7 +75,7 @@ const STEPS = {
   },
 
   async voice() {
-    if (!fs.existsSync('models/kokoro-v1.0.int8.onnx')) throw new Error('the Kokoro voice model is missing (the workflow downloads it into models/)')
+    if (!fs.existsSync('models/kokoro-v1.0.onnx')) throw new Error('the Kokoro voice model is missing (the workflow downloads it into models/)')
     await report(ID, { stage: 'voice', note: 'Kokoro is reading ' + job().scenes.length + ' scenes' })
     await run('python3', ['worker/voice.py'])
     const tl = JSON.parse(fs.readFileSync('src/timeline.json', 'utf8')), cap = fs.existsSync('work/capture.json') ? JSON.parse(fs.readFileSync('work/capture.json', 'utf8')) : { clipSeconds: 8 }
