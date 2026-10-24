@@ -21,21 +21,13 @@ function run(cmd, args) {                                                  // a 
 }
 const probe = (f, what) => execFileSync('ffprobe', ['-v', 'error', ...what, '-of', 'csv=p=0', f]).toString().trim()
 
-const STEPS = {
-  async job() {
-    const j = await call(`/api/factory/job?id=${ID}`, {})
-    fs.writeFileSync('work/job.json', JSON.stringify(j, null, 1))
-    log(`job: part ${j.part}, ${j.scenes.length} scenes, ${j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)
-  },
-
-  // Film the real site: load it, close a cookie banner if there is one, take a screenshot, then scroll through slowly.
-  async capture() {
-    const j = job(), url = j.site.url, test = (process.env.FACTORY_TEST_HOSTS || '').split(',').filter(Boolean)
+async function film(url, clipPath, shotPath, label, n, of) {
+    const test = (process.env.FACTORY_TEST_HOSTS || '').split(',').filter(Boolean)
     const u = new URL(url); if (u.protocol !== 'https:' && !test.includes(u.host)) throw new Error('only https sites are filmed')
-    await report(ID, { stage: 'capture', total: 4, done: 0, note: 'opening ' + u.host })
+    await report(ID, { stage: 'capture', total: 4 * of, done: 4 * n, note: (label ? label + ': ' : '') + 'opening ' + u.host })
     const { chromium } = await import('playwright')
     const browser = await chromium.launch({ args: ['--mute-audio', '--autoplay-policy=no-user-gesture-required'] })
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, recordVideo: { dir: 'work/rec', size: { width: 1280, height: 800 } }, locale: 'en-GB' })
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, recordVideo: { dir: 'work/rec' + n, size: { width: 1280, height: 800 } }, locale: 'en-GB' })
     const page = await ctx.newPage(), t0 = Date.now()
     try {
       const r = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 })
@@ -52,10 +44,10 @@ const STEPS = {
       }
       if (!cleared) break
     }
-    await report(ID, { done: 1, note: 'loaded, taking a screenshot' })
+    await report(ID, { done: 4 * n + 1, note: (label ? label + ': ' : '') + 'loaded, taking a screenshot' })
     const startAt = (Date.now() - t0) / 1000
-    await page.screenshot({ path: 'public/shot.png' })
-    await report(ID, { done: 2, note: 'scrolling through the site' })
+    await page.screenshot({ path: shotPath })
+    await report(ID, { done: 4 * n + 2, note: (label ? label + ': ' : '') + 'scrolling through the site' })
     // scroll with the mouse wheel, like a person: it works whether the page scrolls or an inner panel does
     await page.mouse.move(640, 420)
     const y0 = await page.evaluate(() => window.scrollY).catch(() => 0)
@@ -66,12 +58,29 @@ const STEPS = {
     const far = Math.round(moved - y0)
     const video = page.video(); await ctx.close(); await browser.close()
     const raw = await video.path()
-    await report(ID, { done: 3, note: 'preparing the recording' })
-    await run('ffmpeg', ['-v', 'error', '-y', '-ss', String(startAt), '-i', raw, '-vf', 'fps=30,scale=1280:800', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', 'public/clip.mp4'])
-    const secs = Number(probe('public/clip.mp4', ['-show_entries', 'format=duration']))
-    fs.writeFileSync('work/capture.json', JSON.stringify({ clipSeconds: Math.round(secs * 10) / 10, scrolled: far }))
-    await report(ID, { done: 4, bytes: fs.statSync('public/clip.mp4').size })
+    await report(ID, { done: 4 * n + 3, note: (label ? label + ': ' : '') + 'preparing the recording' })
+    await run('ffmpeg', ['-v', 'error', '-y', '-ss', String(startAt), '-i', raw, '-vf', 'fps=30,scale=1280:800', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', clipPath])
+    const secs = Number(probe(clipPath, ['-show_entries', 'format=duration']))
+    await report(ID, { done: 4 * n + 4, bytes: fs.statSync(clipPath).size })
     log(`capture: ${secs.toFixed(1)}s of ${u.host}, scrolled ${far}px`)
+    return Math.round(secs * 10) / 10
+}
+
+const STEPS = {
+  async job() {
+    const j = await call(`/api/factory/job?id=${ID}`, {})
+    fs.writeFileSync('work/job.json', JSON.stringify(j, null, 1))
+    log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : 'part ' + j.part}, ${j.scenes.length} scenes, ${j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)
+  },
+
+  // Film the real site(s): load, clear pop-ups, screenshot, scroll through with the mouse wheel. A long video films each chapter's site.
+  async capture() {
+    const j = job()
+    if (j.kind === 'long') {
+      const sites = (j.chapters || []).filter((c) => c.site), secs = {}
+      for (const [i, c] of sites.entries()) secs[c.seg] = await film(c.site.url, `public/clip_${c.seg}.mp4`, `public/shot_${c.seg}.png`, `site ${i + 1} of ${sites.length}`, i, sites.length)
+      fs.writeFileSync('work/capture.json', JSON.stringify({ clipSeconds: secs }))
+    } else fs.writeFileSync('work/capture.json', JSON.stringify({ clipSeconds: await film(j.site.url, 'public/clip.mp4', 'public/shot.png', '', 0, 1) }))
   },
 
   async voice() {
@@ -92,7 +101,7 @@ const STEPS = {
     const { bundle } = await import('@remotion/bundler'), { selectComposition, renderMedia } = await import('@remotion/renderer')
     await report(ID, { stage: 'render', note: 'preparing' })
     const serve = await bundle({ entryPoint: path.resolve('src/index.jsx') })
-    const comp = await selectComposition({ serveUrl: serve, id: 'Short' })
+    const comp = await selectComposition({ serveUrl: serve, id: job().kind === 'long' ? 'Long' : 'Short' })
     const range = arg('frames') ? arg('frames').split('-').map(Number) : null           // local testing only
     log(`render: ${comp.durationInFrames} frames at ${comp.fps} fps, ${comp.width}×${comp.height}, ${os.cpus().length} cores`)
     await report(ID, { total: comp.durationInFrames, done: 0, note: `${comp.durationInFrames} frames` })
@@ -113,7 +122,9 @@ const STEPS = {
         onRetry: (k, wait, why) => { log(`  piece ${i + 1}: the admin answered ${why}, trying again in ${wait / 1000}s`); return report(ID, { stage: 'upload', note: `piece ${i + 1} of ${n}: retrying (${k} of 7)` }) } })
       await report(ID, { done: i + 1 })
     }
-    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height }, { tries: 6 })
+    const tl = fs.existsSync('src/timeline.json') ? JSON.parse(fs.readFileSync('src/timeline.json', 'utf8')) : {}
+    const chapters = j.kind === 'long' ? (j.chapters || []).map((c) => { const sc = (tl.scenes || []).find((x) => x.seg === c.seg); return sc ? { title: c.title, start: Math.round(sc.start * 10) / 10 } : null }).filter(Boolean) : undefined
+    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height, ...(chapters ? { chapters } : {}) }, { tries: 6 })
     log(`upload: ${n} piece${n === 1 ? '' : 's'}, ${buf.length} bytes, ${seconds.toFixed(1)}s, done`)
   },
 }

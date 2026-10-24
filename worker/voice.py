@@ -29,6 +29,6 @@ for i, sc in enumerate(job['scenes']):
     print(f'  scene {i + 1}/{len(job["scenes"])}: {d:.1f}s', flush=True)
 audio = np.concatenate(parts); sf.write('public/voice.wav', audio, SR)
 host = re.sub(r'^https?://(www\.)?', '', job['site']['url']).split('/')[0]
-json.dump({'fps': FPS, 'duration': round(t + 0.6, 3), 'scenes': scenes, 'site': {**job['site'], 'host': host}, 'part': job['part'], 'series': job['series']},
+json.dump({'fps': FPS, 'duration': round(t + 0.6, 3), 'scenes': scenes, 'site': {**job['site'], 'host': host}, 'part': job.get('part'), 'series': job['series'], 'kind': job.get('kind', 'short'), 'volume': job.get('volume'), 'chapters': job.get('chapters')},
           open('src/timeline.json', 'w'), indent=1)
 print(f'  voice: {t:.1f}s with {voice}', flush=True)

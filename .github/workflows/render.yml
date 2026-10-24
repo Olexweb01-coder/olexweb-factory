@@ -13,7 +13,7 @@ permissions: { contents: read }
 jobs:
   render:
     runs-on: ubuntu-24.04            # the system the factory was tested on (ubuntu-latest moved to 26 in Oct 2026)
-    timeout-minutes: 30
+    timeout-minutes: 60              # a long video (5–8 minutes) renders in about 20–30 minutes
     env:
       OLEX_API: ${{ inputs.api }}
       FACTORY_SECRET: ${{ secrets.FACTORY_SECRET }}
