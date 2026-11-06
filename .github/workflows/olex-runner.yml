@@ -7,12 +7,12 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 7               # the site's frequent run may take up to 5 minutes (its limit is 300 s)
     steps:
       - name: Run Olex AI
         env: { CRON_SECRET: "${{ secrets.CRON_SECRET }}" }
         run: |
           if [ -z "$CRON_SECRET" ]; then echo "Add the CRON_SECRET repository secret first."; exit 1; fi
-          code=$(curl -s -o /tmp/out.json -w '%{http_code}' --max-time 70 -H "Authorization: Bearer $CRON_SECRET" "https://olexweb.com/api/assistant/cron?run=due")
+          code=$(curl -s -o /tmp/out.json -w '%{http_code}' --max-time 310 -H "Authorization: Bearer $CRON_SECRET" "https://olexweb.com/api/assistant/cron?run=due")
           echo "status $code"; head -c 600 /tmp/out.json; echo
           [ "$code" = "200" ]
