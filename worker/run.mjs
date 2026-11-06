@@ -1,5 +1,7 @@
 // The factory worker: takes one approved script from the Olexweb admin and turns it into a finished Short.
 //   job → capture (film the real site) → voice (Kokoro) → music (synthesised) → render (Remotion) → upload (4 MiB pieces)
+// Story Shorts (kind 'story', the sketch style): voice = voice print + Chatterbox acting + mix (worker/story), render =
+// worker/story/render.mjs (frames drawn in a browser); music and effects come from the mix.
 // Every step reports to the admin, so the progress panel there shows exactly where it is. Any failure is reported with
 // a plain reason and the run stops. Usage: node worker/run.mjs --id 12 [--step capture]   (OLEX_API, FACTORY_SECRET in env)
 import fs from 'node:fs'
@@ -70,7 +72,7 @@ const STEPS = {
   async job() {
     const j = await call(`/api/factory/job?id=${ID}`, {})
     fs.writeFileSync('work/job.json', JSON.stringify(j, null, 1))
-    log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : 'part ' + j.part}, ${j.scenes.length} scenes, ${j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)
+    log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : j.kind === 'story' ? 'story Short' : 'part ' + j.part}, ${j.kind === 'story' ? j.story.beats.length + ' beats' : j.scenes.length + ' scenes'}, ${j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)
   },
 
   // Film the real site(s): load, clear pop-ups, screenshot, scroll through with the mouse wheel. A long video films each chapter's site.
@@ -85,6 +87,19 @@ const STEPS = {
 
   async voice() {
     if (!fs.existsSync('models/kokoro-v1.0.onnx')) throw new Error('the Kokoro voice model is missing (the workflow downloads it into models/)')
+    if (job().kind === 'story') {                                          // his voice: print → acting (Chatterbox) → mix with effects and music
+      const lines = job().story.beats.filter((b) => (b.text || '').trim()).length
+      await report(ID, { stage: 'voice', note: `his voice print and ${lines} backup lines` })
+      await run('python3', ['worker/story/voiceprint.py'])
+      const cbox = fs.existsSync('.cbox/bin/python') ? '.cbox/bin/python' : null
+      if (cbox) { await report(ID, { stage: 'voice', note: `acting ${lines} lines (about ${Math.ceil(lines * 0.6)} min)` }); await run(cbox, ['worker/story/act.py']) }
+      else log('voice: Chatterbox isn’t installed here; the backup voice is used')
+      await report(ID, { stage: 'music', note: 'mixing voice, sound effects and music' })
+      await run('python3', ['worker/story/mix.py'])
+      const s = JSON.parse(fs.readFileSync('work/story.json', 'utf8'))
+      log(`voice: ${s.secs.toFixed(1)}s, ${s.voice.acted} acted, ${s.voice.backup} backup`)
+      return
+    }
     await report(ID, { stage: 'voice', note: 'Kokoro is reading ' + job().scenes.length + ' scenes' })
     await run('python3', ['worker/voice.py'])
     const tl = JSON.parse(fs.readFileSync('src/timeline.json', 'utf8')), cap = fs.existsSync('work/capture.json') ? JSON.parse(fs.readFileSync('work/capture.json', 'utf8')) : { clipSeconds: 8 }
@@ -93,11 +108,18 @@ const STEPS = {
   },
 
   async music() {
+    if (job().kind === 'story') return                                     // the story mix already has its music and effects
     await report(ID, { stage: 'music', note: 'music bed and sound effects' })
     await run('python3', ['worker/sound.py'])
   },
 
   async render() {
+    if (job().kind === 'story') {
+      await report(ID, { stage: 'render', note: 'drawing the frames' })
+      const { render: drawStory } = await import('./story/render.mjs')
+      const r = await drawStory({ onProgress: (f, n) => report(ID, { total: n, done: f, note: Math.round(100 * f / n) + '%' }) })
+      log(`render: ${r.frames} frames drawn`)
+    } else {
     const { bundle } = await import('@remotion/bundler'), { selectComposition, renderMedia } = await import('@remotion/renderer')
     await report(ID, { stage: 'render', note: 'preparing' })
     const serve = await bundle({ entryPoint: path.resolve('src/index.jsx') })
@@ -108,6 +130,7 @@ const STEPS = {
     let lastLog = 0
     await renderMedia({ composition: comp, serveUrl: serve, codec: 'h264', crf: 20, outputLocation: 'out/raw.mp4', concurrency: os.cpus().length, ...(range ? { frameRange: range } : {}),
       onProgress: ({ renderedFrames, progress }) => { report(ID, { done: renderedFrames, note: Math.round(progress * 100) + '%' }); if (Date.now() - lastLog > 10000) { lastLog = Date.now(); log(`  ${Math.round(progress * 100)}%`) } } })
+    }
     // YouTube plays everything at about -14 LUFS: match it, and put the index at the front so it plays while loading
     await run('ffmpeg', ['-v', 'error', '-y', '-i', 'out/raw.mp4', '-c:v', 'copy', '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart', 'out/video.mp4'])
     log(`render: done, ${(fs.statSync('out/video.mp4').size / 1048576).toFixed(1)} MB`)

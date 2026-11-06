@@ -40,7 +40,31 @@ jobs:
         run: |
           npm ci || npm install
           npx playwright install --with-deps chromium
-          pip install --quiet kokoro-onnx==0.6.1 soundfile numpy scipy
+          pip install --quiet kokoro-onnx==0.6.1 soundfile numpy scipy librosa
           sudo apt-get install -y -qq ffmpeg > /dev/null
+      - name: Get the job
+        run: |
+          node worker/run.mjs --id "${{ inputs.id }}" --step job
+          echo "KIND=$(node -e "console.log(require('./work/job.json').kind || 'short')")" >> "$GITHUB_ENV"
+      # Story Shorts only: Chatterbox (his acted voice) in its own setup, because it needs numpy 1 and Kokoro numpy 2.
+      # Kept between runs, so only the first story run pays the install (about 30 minutes); later runs restore it.
+      - name: Chatterbox setup (cached between runs)
+        if: env.KIND == 'story'
+        uses: actions/cache@v4
+        with:
+          path: .cbox
+          key: cbox-0.1.7-torch2.6.0-ubuntu-24.04
+      - name: Chatterbox model (cached between runs)
+        if: env.KIND == 'story'
+        uses: actions/cache@v4
+        with: { path: ~/.cache/huggingface, key: chatterbox-hf-v1 }
+      - name: Install Chatterbox if it isn't cached
+        if: env.KIND == 'story'
+        run: |
+          if [ ! -x .cbox/bin/python ]; then
+            python3 -m venv .cbox
+            .cbox/bin/pip install --quiet torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+            .cbox/bin/pip install --quiet chatterbox-tts==0.1.7 soundfile || { echo "Chatterbox didn't install: the backup voice will be used"; rm -rf .cbox; }
+          fi
       - name: Make the video
-        run: node worker/run.mjs --id "${{ inputs.id }}"
+        run: node worker/run.mjs --id "${{ inputs.id }}" --step capture,voice,music,render,upload

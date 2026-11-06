@@ -8,3 +8,5 @@ public/voice.wav
 public/music.wav
 public/sfx_*.wav
 src/timeline.json
+.cbox/
+.kokoro/
