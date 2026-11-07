@@ -1,9 +1,18 @@
 # Step 3 of the story voice: put it together. For each line, the acted take (Chatterbox) if it passes its checks, else
 # the backup reading (Kokoro, with a light shout/cry treatment). Then the sound effects each scene calls for, and music
 # (quiet under the voice, silent at the tense moments). Writes work/story.wav and work/story.json (timing for the frames).
-import json, os, re, numpy as np, soundfile as sf
+# Usage: python3 mix.py [fb]   fb = Facebook's version: the last beat (the loop) is swapped for his question to the viewers,
+# and it writes work/story_fb.wav and work/story_fb.json instead.
+import json, os, re, sys, numpy as np, soundfile as sf
 SR, FPS = 24000, 24
-job = json.load(open('work/job.json')); beats = job['story']['beats']
+job = json.load(open('work/job.json')); main = job['story']['beats']
+FB = len(sys.argv) > 1 and sys.argv[1] == 'fb'
+if FB:
+    ask = (job.get('fb') or {}).get('ask')
+    if not ask: raise SystemExit('no Facebook ending in this job')
+    beats, audio = main[:-1] + [ask], list(range(len(main) - 1)) + [len(main)]    # the ask line was voiced as line len(main)
+else: beats, audio = main, list(range(len(main)))
+OUT = 'work/story_fb' if FB else 'work/story'
 PAUSE = {'yell': 0.15, 'read': 0.55, 'cry': 1.05, 'idea': 0.6, 'celebrate': 1.1}
 HUSH = {'yell', 'read', 'panic', 'cry'}
 
@@ -61,12 +70,13 @@ for i, b in enumerate(beats):
         d = float((b.get('props') or {}).get('secs', 1.2)); timing.append({'start': t, 'end': t + d})
         parts.append(np.zeros(int(d * SR), np.float32)); t += d; continue
     a, src = None, 'backup'
-    if os.path.exists(f'work/cbox/beat_{i}.wav'):
-        c = trim(load(f'work/cbox/beat_{i}.wav'))
+    j = audio[i]
+    if os.path.exists(f'work/cbox/beat_{j}.wav'):
+        c = trim(load(f'work/cbox/beat_{j}.wav'))
         if sane(c, text): a, src = c, 'acted'
     if a is None:
-        if not os.path.exists(f'work/kokoro/beat_{i}.wav'): raise SystemExit(f'no voice for line {i + 1}')
-        a = treat(trim(load(f'work/kokoro/beat_{i}.wav')), b.get('emotion'))
+        if not os.path.exists(f'work/kokoro/beat_{j}.wav'): raise SystemExit(f'no voice for line {i + 1}')
+        a = treat(trim(load(f'work/kokoro/beat_{j}.wav')), b.get('emotion'))
     a = a / max(1e-6, np.abs(a).max()) * (0.95 if b.get('emotion') == 'panic' else 0.8)
     used[src] += 1; g = PAUSE.get(b.get('scene'), 0.32)
     timing.append({'start': t, 'end': t + len(a) / SR, 'voice': src}); parts += [a, np.zeros(int(g * SR), np.float32)]; t += len(a) / SR + g
@@ -94,6 +104,9 @@ for b, T in zip(beats, timing):
         for j in range(min(3, k)): at(s + 0.2 + j * max(0.6, (e - s) / max(1, k + 0.5)), 'pop', 0.25)
     elif sc == 'celebrate': at(s + 0.5, 'thud', 0.4); at(s + 0.55, 'cheer', 1.6)
     elif sc == 'again': at(s - 0.7, 'buzz', 0.4); at(e - 0.3, 'gasp', 0.3)
+    elif sc == 'chapter': at(s, 'whoosh', 0.45); at(s + 0.35, 'ding', 1.0)
+    elif sc == 'ask': at(s, 'pop', 0.25)
+    elif sc == 'outro': at(e - 0.2, 'cheer', 1.4)
 
 # 3. music: four warm chords and a soft beat, quiet; silent at the tense moments
 music = np.zeros(n, np.float32); bar = 2.4
@@ -111,7 +124,7 @@ for b, T in zip(beats, timing):
 
 mixed = voice * 0.95 + music * level + fx
 mixed = (mixed / max(1e-6, np.abs(mixed).max()) * 0.92).astype(np.float32)
-sf.write('work/story.wav', mixed, SR)
+sf.write(OUT + '.wav', mixed, SR)
 hop = SR // FPS; amp = [float(np.sqrt(np.mean(voice[i:i + hop] ** 2))) for i in range(0, n, hop)]; peak = max(amp) or 1
-json.dump({'fps': FPS, 'secs': secs, 'beats': timing, 'amp': [round(a / peak, 3) for a in amp], 'voice': used}, open('work/story.json', 'w'))
-print(f'story audio: {secs:.1f}s, {used["acted"]} acted line(s), {used["backup"]} backup line(s)')
+json.dump({'fps': FPS, 'secs': secs, 'beats': timing, 'amp': [round(a / peak, 3) for a in amp], 'voice': used}, open(OUT + '.json', 'w'))
+print(f'{"Facebook " if FB else ""}story audio: {secs:.1f}s, {used["acted"]} acted line(s), {used["backup"]} backup line(s)')

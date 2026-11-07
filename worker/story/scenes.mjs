@@ -5,7 +5,7 @@
 import { guy, eyeCloseup, room, roughDefs, laptopBack, phone, desk, PAPER, GLASS, INK, RED } from './sketch.mjs'
 
 export const W = 720, H = 1280
-export const SCENES = ['yell', 'timejump', 'desk', 'buzz', 'read', 'panic', 'cry', 'idea', 'reveal', 'proof', 'celebrate', 'again']
+export const SCENES = ['yell', 'timejump', 'desk', 'buzz', 'read', 'panic', 'cry', 'idea', 'reveal', 'proof', 'celebrate', 'again', 'ask']
 export const FACE = { panic: 'panic', shock: 'shocked', cry: 'cry', excited: 'happy', happy: 'happy', calm: 'neutral', curious: 'neutral', smug: 'smug', focus: 'focus' }
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v)), ease = (x) => 1 - Math.pow(1 - clamp(x), 3)
 export const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -98,6 +98,13 @@ export function makeStory(beats, timing, shot, host) {
       case 'again': {                                       // another buzz… and back into the opening shot: the loop
         const z = ease((t - (b.end - 0.25)) / 0.5), buzzing = t > b.start - 0.7 && t < b.start - 0.2
         body = z > 0 ? yell(t, tt, z) : `${deskScene(t > b.start + 0.4 ? 'shocked' : 'neutral', { ...tt, headBob: nod, look: [0.8, 0.6] })}${phoneOnDesk(t, buzzing, true)}`
+        break
+      }
+      case 'ask': {                                         // Facebook's ending: he turns to you and asks (comments, not the loop)
+        const p = ease(lt / 0.3), dots = [0, 1, 2].map((q) => `<circle cx="${-40 + q * 40}" cy="-6" r="${9 + 3 * Math.max(0, Math.sin(t * 6 - q))}" fill="${INK}"/>`).join('')
+        body = `${room(W, H)}${guy(360, 1300, 1.3, face(b, 'happy'), 'shrug', { ...tt, bob, headBob: nod })}
+          <g transform="translate(${W / 2} 500) scale(${p})" filter="url(#rough)"><rect x="-250" y="-70" width="500" height="140" rx="40" fill="#fff" ${L(6)}/><path d="M-40 70 L-70 120 L10 70 Z" fill="#fff" ${L(6)}/>
+            <g transform="translate(-150 0)">${dots}</g><text x="70" y="16" text-anchor="middle" font-family="H" font-weight="900" font-size="46" fill="${INK}">TELL ME</text></g>`
         break
       }
       default: body = `${room(W, H)}${guy(360, 1250, 1.3, face(b), 'rest', { ...tt, bob, headBob: nod })}`

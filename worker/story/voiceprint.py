@@ -6,7 +6,7 @@ VOICE_B = ({'am_michael': .45, 'am_puck': .35, 'am_fenrir': .2}, 1.0)        # m
 PRINT = ("Hey! So, this is me. I find free websites that save you money. "
          "Some of them are honestly amazing, and some of them, well... let's just say I learned the hard way.")
 SR = 24000
-job = json.load(open('work/job.json')); beats = job['story']['beats']
+job = json.load(open('work/job.json')); beats = job['story']['beats'] + ([job['fb']['ask']] if (job.get('fb') or {}).get('ask') else [])   # + Facebook's ending line
 k = Kokoro('models/kokoro-v1.0.onnx', 'models/voices-v1.0.bin')
 mix, semis = VOICE_B
 style = sum(k.get_voice_style(v) * w for v, w in mix.items()).astype(np.float32)

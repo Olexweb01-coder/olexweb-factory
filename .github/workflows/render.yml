@@ -13,7 +13,7 @@ permissions: { contents: read }
 jobs:
   render:
     runs-on: ubuntu-24.04            # the system the factory was tested on (ubuntu-latest moved to 26 in Oct 2026)
-    timeout-minutes: 60              # a long video (5–8 minutes) renders in about 20–30 minutes
+    timeout-minutes: 200             # a long story (5–8 minutes, acted voice) takes about 1½–2½ hours; a Short about 15 minutes
     env:
       OLEX_API: ${{ inputs.api }}
       FACTORY_SECRET: ${{ secrets.FACTORY_SECRET }}
@@ -46,25 +46,28 @@ jobs:
         run: |
           node worker/run.mjs --id "${{ inputs.id }}" --step job
           echo "KIND=$(node -e "console.log(require('./work/job.json').kind || 'short')")" >> "$GITHUB_ENV"
-      # Story Shorts only: Chatterbox (his acted voice) in its own setup, because it needs numpy 1 and Kokoro numpy 2.
+      # Story Shorts and long stories only: Chatterbox (his acted voice) in its own setup, because it needs numpy 1 and Kokoro numpy 2.
       # Kept between runs, so only the first story run pays the install (about 30 minutes); later runs restore it.
       - name: Chatterbox setup (cached between runs)
-        if: env.KIND == 'story'
+        if: env.KIND == 'story' || env.KIND == 'saga'
         uses: actions/cache@v4
         with:
           path: .cbox
           key: cbox-0.1.7-torch2.6.0-ubuntu-24.04
       - name: Chatterbox model (cached between runs)
-        if: env.KIND == 'story'
+        if: env.KIND == 'story' || env.KIND == 'saga'
         uses: actions/cache@v4
         with: { path: ~/.cache/huggingface, key: chatterbox-hf-v1 }
       - name: Install Chatterbox if it isn't cached
-        if: env.KIND == 'story'
+        if: env.KIND == 'story' || env.KIND == 'saga'
         run: |
           if [ ! -x .cbox/bin/python ]; then
+            # the first install takes about 30 minutes: keep telling the admin we're alive, so it isn't taken for a stuck run
+            ( while true; do sleep 240; node worker/hello.mjs "${{ inputs.id }}" > /dev/null 2>&1 || true; done ) & HB=$!
             python3 -m venv .cbox
             .cbox/bin/pip install --quiet torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
             .cbox/bin/pip install --quiet chatterbox-tts==0.1.7 soundfile || { echo "Chatterbox didn't install: the backup voice will be used"; rm -rf .cbox; }
+            kill $HB 2>/dev/null || true
           fi
       - name: Make the video
         run: node worker/run.mjs --id "${{ inputs.id }}" --step capture,voice,music,render,upload

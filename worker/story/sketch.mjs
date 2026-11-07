@@ -78,6 +78,7 @@ const ARMS = {
   phone: [[-46, -240, -86, -150, -92, -70], [46, -240, 90, -170, 40, -300]],
   cheer: [[-46, -250, -130, -360, -110, -450], [46, -250, 130, -360, 110, -450]],
   shrug: [[-46, -240, -150, -220, -170, -290], [46, -240, 150, -220, 170, -290]],
+  wave: [[-46, -240, -86, -150, -92, -70], [46, -250, 160, -320, 175, -430]],           // one hand up, saying hello or goodbye
 }
 const hand = (x, y) => `<ellipse cx="${x}" cy="${y}" rx="19" ry="16" fill="${INK}"/><ellipse cx="${x - 14}" cy="${y - 10}" rx="7" ry="10" fill="${INK}" transform="rotate(-30 ${x - 14} ${y - 10})"/>`
 export function guy(x, y, s = 1, ex = 'neutral', pose = 'rest', o = {}) {

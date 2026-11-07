@@ -1,7 +1,9 @@
 // The factory worker: takes one approved script from the Olexweb admin and turns it into a finished Short.
 //   job → capture (film the real site) → voice (Kokoro) → music (synthesised) → render (Remotion) → upload (4 MiB pieces)
 // Story Shorts (kind 'story', the sketch style): voice = voice print + Chatterbox acting + mix (worker/story), render =
-// worker/story/render.mjs (frames drawn in a browser); music and effects come from the mix.
+// worker/story/render.mjs (frames drawn in a browser); music and effects come from the mix. A story also gets Facebook's
+// version (its question ending instead of the loop), sent back alongside as a second set of pieces (numbered from 500).
+// The long story (kind 'saga'): his whole day in chapters, 1280×720, one site filmed per chapter, same voice and drawing.
 // Every step reports to the admin, so the progress panel there shows exactly where it is. Any failure is reported with
 // a plain reason and the run stops. Usage: node worker/run.mjs --id 12 [--step capture]   (OLEX_API, FACTORY_SECRET in env)
 import fs from 'node:fs'
@@ -16,11 +18,12 @@ if (!Number.isInteger(ID) || ID < 1) { console.error('Give the script id: --id 1
 for (const d of ['work', 'out', 'public', 'models']) fs.mkdirSync(d, { recursive: true })
 const log = (s) => console.log(new Date().toISOString().slice(11, 19) + '  ' + s)
 const job = () => JSON.parse(fs.readFileSync('work/job.json', 'utf8'))
-function run(cmd, args) {                                                  // a child process; its output is shown, a failure is an error
-  return new Promise((res, rej) => { const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] }); let err = ''
-    p.stdout.on('data', (d) => process.stdout.write(d)); p.stderr.on('data', (d) => { err += d; process.stderr.write(d) })
+function run(cmd, args, onLine) {                                          // a child process; its output is shown, a failure is an error
+  return new Promise((res, rej) => { const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] }); let err = '', buf = ''
+    p.stdout.on('data', (d) => { process.stdout.write(d); if (onLine) { buf += d; const ls = buf.split('\n'); buf = ls.pop(); for (const l of ls) Promise.resolve(onLine(l)).catch(() => {}) } }); p.stderr.on('data', (d) => { err += d; process.stderr.write(d) })
     p.on('close', (c) => (c === 0 ? res() : rej(new Error(`${path.basename(cmd)} failed: ${err.trim().split('\n').slice(-2).join(' ').slice(0, 200)}`)))) })
 }
+const STORYLIKE = (k) => k === 'story' || k === 'saga'
 const probe = (f, what) => execFileSync('ffprobe', ['-v', 'error', ...what, '-of', 'csv=p=0', f]).toString().trim()
 
 async function film(url, clipPath, shotPath, label, n, of) {
@@ -72,7 +75,7 @@ const STEPS = {
   async job() {
     const j = await call(`/api/factory/job?id=${ID}`, {})
     fs.writeFileSync('work/job.json', JSON.stringify(j, null, 1))
-    log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : j.kind === 'story' ? 'story Short' : 'part ' + j.part}, ${j.kind === 'story' ? j.story.beats.length + ' beats' : j.scenes.length + ' scenes'}, ${j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)
+    log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : j.kind === 'saga' ? 'long story, ' + (j.chapters || []).length + ' chapters' : j.kind === 'story' ? 'story Short' + (j.fb ? ' (+ Facebook version)' : '') : 'part ' + j.part}, ${STORYLIKE(j.kind) ? j.story.beats.length + ' beats' : j.scenes.length + ' scenes'}, ${j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)
   },
 
   // Film the real site(s): load, clear pop-ups, screenshot, scroll through with the mouse wheel. A long video films each chapter's site.
@@ -82,20 +85,30 @@ const STEPS = {
       const sites = (j.chapters || []).filter((c) => c.site), secs = {}
       for (const [i, c] of sites.entries()) secs[c.seg] = await film(c.site.url, `public/clip_${c.seg}.mp4`, `public/shot_${c.seg}.png`, `site ${i + 1} of ${sites.length}`, i, sites.length)
       fs.writeFileSync('work/capture.json', JSON.stringify({ clipSeconds: secs }))
+    } else if (j.kind === 'saga') {                                        // only the screenshot is used; a site that won't load leaves its frame blank, not the video
+      const ch = j.chapters || []
+      for (const [k, c] of ch.entries()) {
+        try { await film(c.site.url, `work/clip_${k}.mp4`, `public/shot_${k}.png`, `site ${k + 1} of ${ch.length}`, k, ch.length) }
+        catch (e) { log(`capture: ${e.message} (chapter ${k + 1} shows no screenshot)`) }
+      }
     } else fs.writeFileSync('work/capture.json', JSON.stringify({ clipSeconds: await film(j.site.url, 'public/clip.mp4', 'public/shot.png', '', 0, 1) }))
   },
 
   async voice() {
     if (!fs.existsSync('models/kokoro-v1.0.onnx')) throw new Error('the Kokoro voice model is missing (the workflow downloads it into models/)')
-    if (job().kind === 'story') {                                          // his voice: print → acting (Chatterbox) → mix with effects and music
-      const lines = job().story.beats.filter((b) => (b.text || '').trim()).length
+    if (STORYLIKE(job().kind)) {                                           // his voice: print → acting (Chatterbox) → mix with effects and music
+      const j = job(), lines = [...j.story.beats, ...(j.fb && j.fb.ask ? [j.fb.ask] : [])].filter((b) => (b.text || '').trim()).length
       await report(ID, { stage: 'voice', note: `his voice print and ${lines} backup lines` })
       await run('python3', ['worker/story/voiceprint.py'])
       const cbox = fs.existsSync('.cbox/bin/python') ? '.cbox/bin/python' : null
-      if (cbox) { await report(ID, { stage: 'voice', note: `acting ${lines} lines (about ${Math.ceil(lines * 0.6)} min)` }); await run(cbox, ['worker/story/act.py']) }
-      else log('voice: Chatterbox isn’t installed here; the backup voice is used')
+      if (cbox) {                                                          // every acted line is reported, so a long story never looks stuck
+        await report(ID, { stage: 'voice', total: lines, done: 0, note: `acting ${lines} lines (about ${Math.ceil(lines * 0.6)} min)` })
+        if (j.kind === 'saga') process.env.ACT_BUDGET = process.env.ACT_BUDGET || '6600'      // 110 minutes at most; the calm lines fall back first
+        await run(cbox, ['worker/story/act.py'], (l) => { const m = /^acted (\d+)\/(\d+)/.exec(l); return m ? report(ID, { done: Number(m[1]), note: `acted ${m[1]} of ${m[2]} lines` }) : null })
+      } else log('voice: Chatterbox isn’t installed here; the backup voice is used')
       await report(ID, { stage: 'music', note: 'mixing voice, sound effects and music' })
       await run('python3', ['worker/story/mix.py'])
+      if (j.kind === 'story' && j.fb && j.fb.ask) await run('python3', ['worker/story/mix.py', 'fb']).catch((e) => log('voice: Facebook’s version couldn’t be mixed (' + e.message + '); Facebook gets the main video'))
       const s = JSON.parse(fs.readFileSync('work/story.json', 'utf8'))
       log(`voice: ${s.secs.toFixed(1)}s, ${s.voice.acted} acted, ${s.voice.backup} backup`)
       return
@@ -108,17 +121,25 @@ const STEPS = {
   },
 
   async music() {
-    if (job().kind === 'story') return                                     // the story mix already has its music and effects
+    if (STORYLIKE(job().kind)) return                                      // the story mix already has its music and effects
     await report(ID, { stage: 'music', note: 'music bed and sound effects' })
     await run('python3', ['worker/sound.py'])
   },
 
   async render() {
-    if (job().kind === 'story') {
+    if (STORYLIKE(job().kind)) {
       await report(ID, { stage: 'render', note: 'drawing the frames' })
       const { render: drawStory } = await import('./story/render.mjs')
-      const r = await drawStory({ onProgress: (f, n) => report(ID, { total: n, done: f, note: Math.round(100 * f / n) + '%' }) })
-      log(`render: ${r.frames} frames drawn`)
+      const r = await drawStory({ variant: null, onProgress: (f, n) => report(ID, { total: n, done: f, note: Math.round(100 * f / n) + '%' }) })
+      log(`render: ${r.frames} frames drawn, ${r.width}×${r.height}`)
+      if (job().kind === 'story' && fs.existsSync('work/story_fb.json')) {     // Facebook's version: a failure here never costs the main video
+        try {
+          await report(ID, { stage: 'render', note: 'Facebook’s version' })
+          const f = await drawStory({ variant: 'fb', onProgress: (d, n) => report(ID, { total: n, done: d, note: 'Facebook’s version ' + Math.round(100 * d / n) + '%' }) })
+          await run('ffmpeg', ['-v', 'error', '-y', '-i', 'out/raw_fb.mp4', '-c:v', 'copy', '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart', 'out/video_fb.mp4'])
+          log(`render: Facebook’s version, ${f.frames} frames`)
+        } catch (e) { fs.rmSync('out/video_fb.mp4', { force: true }); log('render: Facebook’s version failed (' + e.message + '); Facebook gets the main video') }
+      }
     } else {
     const { bundle } = await import('@remotion/bundler'), { selectComposition, renderMedia } = await import('@remotion/renderer')
     await report(ID, { stage: 'render', note: 'preparing' })
@@ -138,6 +159,7 @@ const STEPS = {
 
   async upload() {
     const j = job(), file = 'out/video.mp4', buf = fs.readFileSync(file), size = j.piece || 4 * 1024 * 1024, n = Math.ceil(buf.length / size)
+    if (n > 400) throw new Error(`the video is too big to send back (${(buf.length / 1048576).toFixed(0)} MB)`)
     const seconds = Number(probe(file, ['-show_entries', 'format=duration'])), [width, height] = probe(file, ['-select_streams', 'v:0', '-show_entries', 'stream=width,height']).split(',').map(Number)
     await report(ID, { stage: 'upload', total: n, done: 0, note: `${(buf.length / 1048576).toFixed(1)} MB in ${n} piece${n === 1 ? '' : 's'}` })
     for (let i = 0; i < n; i++) {
@@ -145,9 +167,24 @@ const STEPS = {
         onRetry: (k, wait, why) => { log(`  piece ${i + 1}: the admin answered ${why}, trying again in ${wait / 1000}s`); return report(ID, { stage: 'upload', note: `piece ${i + 1} of ${n}: retrying (${k} of 7)` }) } })
       await report(ID, { done: i + 1 })
     }
+    // Facebook's version (story Shorts): its own pieces, numbered from 500. If any of it fails, Facebook simply gets the main video.
+    let fb = null
+    if (fs.existsSync('out/video_fb.mp4')) {
+      try {
+        const fbuf = fs.readFileSync('out/video_fb.mp4'), m = Math.ceil(fbuf.length / size)
+        if (m > 400) throw new Error('too big')
+        for (let i = 0; i < m; i++) { await call(`/api/factory/upload?id=${ID}&n=${500 + i}`, fbuf.subarray(i * size, (i + 1) * size), { raw: true, tries: 8 }); await report(ID, { note: `Facebook’s version: piece ${i + 1} of ${m}` }) }
+        fb = { pieces: m, bytes: fbuf.length, seconds: Math.round(Number(probe('out/video_fb.mp4', ['-show_entries', 'format=duration'])) * 10) / 10 }
+      } catch (e) { log('upload: Facebook’s version wasn’t sent (' + e.message + ')') }
+    }
     const tl = fs.existsSync('src/timeline.json') ? JSON.parse(fs.readFileSync('src/timeline.json', 'utf8')) : {}
-    const chapters = j.kind === 'long' ? (j.chapters || []).map((c) => { const sc = (tl.scenes || []).find((x) => x.seg === c.seg); return sc ? { title: c.title, start: Math.round(sc.start * 10) / 10 } : null }).filter(Boolean) : undefined
-    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height, ...(chapters ? { chapters } : {}) }, { tries: 6 })
+    let chapters = j.kind === 'long' ? (j.chapters || []).map((c) => { const sc = (tl.scenes || []).find((x) => x.seg === c.seg); return sc ? { title: c.title, start: Math.round(sc.start * 10) / 10 } : null }).filter(Boolean) : undefined
+    if (j.kind === 'saga') {                                               // YouTube chapters from the voice timing: Intro, each chapter card, the goodbye
+      const tm = JSON.parse(fs.readFileSync('work/story.json', 'utf8')), at = (i) => Math.round(tm.beats[i].start * 10) / 10
+      chapters = [{ title: 'Intro', start: 0 }]
+      j.story.beats.forEach((b, i) => { if (b.scene === 'chapter' && j.chapters[b.ch]) chapters.push({ title: j.chapters[b.ch].title, start: at(i) }); if (b.scene === 'outro') chapters.push({ title: 'Your pick?', start: at(i) }) })
+    }
+    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height, ...(chapters ? { chapters } : {}), ...(fb ? { fb } : {}) }, { tries: 6 })
     log(`upload: ${n} piece${n === 1 ? '' : 's'}, ${buf.length} bytes, ${seconds.toFixed(1)}s, done`)
   },
 }
