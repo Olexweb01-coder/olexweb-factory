@@ -75,7 +75,7 @@ const STEPS = {
   async job() {
     const j = await call(`/api/factory/job?id=${ID}`, {})
     fs.writeFileSync('work/job.json', JSON.stringify(j, null, 1))
-    log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : j.kind === 'saga' ? 'long story, ' + (j.chapters || []).length + ' chapters' : j.kind === 'story' ? 'story Short' + (j.fb ? ' (+ Facebook version)' : '') : 'part ' + j.part}, ${STORYLIKE(j.kind) ? j.story.beats.length + ' beats' : j.scenes.length + ' scenes'}, ${j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)
+    log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : j.kind === 'saga' ? (j.mode === 'tale' ? 'a real story, ' : 'long story, ') + (j.chapters || []).length + ' chapters' : j.kind === 'story' ? 'story Short' + (j.fb ? ' (+ Facebook version)' : '') : 'part ' + j.part}, ${STORYLIKE(j.kind) ? j.story.beats.length + ' beats' : j.scenes.length + ' scenes'}, ${j.mode === 'tale' ? (j.genre || 'story') + ', ' + (j.cast || []).length + ' characters' : j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)   // a real story has no website (Install 22)
   },
 
   // Film the real site(s): load, clear pop-ups, screenshot, scroll through with the mouse wheel. A long video films each chapter's site.
@@ -85,6 +85,8 @@ const STEPS = {
       const sites = (j.chapters || []).filter((c) => c.site), secs = {}
       for (const [i, c] of sites.entries()) secs[c.seg] = await film(c.site.url, `public/clip_${c.seg}.mp4`, `public/shot_${c.seg}.png`, `site ${i + 1} of ${sites.length}`, i, sites.length)
       fs.writeFileSync('work/capture.json', JSON.stringify({ clipSeconds: secs }))
+    } else if (j.kind === 'saga' && j.mode === 'tale') {                   // a real story films no websites (Install 22)
+      log('capture: a story, nothing to film')
     } else if (j.kind === 'saga') {                                        // only the screenshot is used; a site that won't load leaves its frame blank, not the video
       const ch = j.chapters || []
       for (const [k, c] of ch.entries()) {
@@ -182,9 +184,15 @@ const STEPS = {
     if (j.kind === 'saga') {                                               // YouTube chapters from the voice timing: Intro, each chapter card, the goodbye
       const tm = JSON.parse(fs.readFileSync('work/story.json', 'utf8')), at = (i) => Math.round(tm.beats[i].start * 10) / 10
       chapters = [{ title: 'Intro', start: 0 }]
-      j.story.beats.forEach((b, i) => { if (b.scene === 'chapter' && j.chapters[b.ch]) chapters.push({ title: j.chapters[b.ch].title, start: at(i) }); if (b.scene === 'outro') chapters.push({ title: 'Your pick?', start: at(i) }) })
+      j.story.beats.forEach((b, i) => { if (b.scene === 'chapter' && j.chapters[b.ch]) chapters.push({ title: j.chapters[b.ch].title, start: at(i) }); if (b.scene === 'lesson') chapters.push({ title: j.genre === 'scam' ? 'How to spot it' : 'The lesson', start: at(i) }); if (b.scene === 'outro' && j.mode !== 'tale') chapters.push({ title: 'Your pick?', start: at(i) }) })
     }
-    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height, ...(chapters ? { chapters } : {}), ...(fb ? { fb } : {}) }, { tries: 6 })
+    // the thumbnail (real stories): one small piece, number 999; if it fails, YouTube simply picks a frame
+    let thumb = null
+    if (fs.existsSync('out/thumb.jpg')) {
+      try { const tb = fs.readFileSync('out/thumb.jpg'); if (tb.length > size || tb.length > 2 * 1024 * 1024) throw new Error('too big'); await call(`/api/factory/upload?id=${ID}&n=999`, tb, { raw: true, tries: 6 }); thumb = { bytes: tb.length } }
+      catch (e) { log('upload: the thumbnail wasn’t sent (' + e.message + ')') }
+    }
+    await call(`/api/factory/finish?id=${ID}`, { pieces: n, bytes: buf.length, seconds: Math.round(seconds * 10) / 10, width, height, ...(chapters ? { chapters } : {}), ...(fb ? { fb } : {}), ...(thumb ? { thumb } : {}) }, { tries: 6 })
     log(`upload: ${n} piece${n === 1 ? '' : 's'}, ${buf.length} bytes, ${seconds.toFixed(1)}s, done`)
   },
 }

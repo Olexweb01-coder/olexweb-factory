@@ -13,8 +13,9 @@ if FB:
     beats, audio = main[:-1] + [ask], list(range(len(main) - 1)) + [len(main)]    # the ask line was voiced as line len(main)
 else: beats, audio = main, list(range(len(main)))
 OUT = 'work/story_fb' if FB else 'work/story'
-PAUSE = {'yell': 0.15, 'read': 0.55, 'cry': 1.05, 'idea': 0.6, 'celebrate': 1.1}
-HUSH = {'yell', 'read', 'panic', 'cry'}
+PAUSE = {'yell': 0.15, 'read': 0.55, 'cry': 1.05, 'idea': 0.6, 'celebrate': 1.1, 'cold': 0.3, 'line': 0.26, 'lesson': 0.6, 'intro': 0.45}
+HUSH = {'yell', 'read', 'panic', 'cry', 'cold'}
+TALE = job.get('mode') == 'tale'                             # Install 22: a real story (its own effects and music)
 
 def load(p):
     a, sr = sf.read(p, dtype='float32')
@@ -79,6 +80,10 @@ for i, b in enumerate(beats):
         a = treat(trim(load(f'work/kokoro/beat_{j}.wav')), b.get('emotion'))
     a = a / max(1e-6, np.abs(a).max()) * (0.95 if b.get('emotion') == 'panic' else 0.8)
     used[src] += 1; g = PAUSE.get(b.get('scene'), 0.32)
+    if TALE and b.get('scene') == 'line':                    # a story breathes: longer after a twist or a big feeling, quick in a back-and-forth
+        g = 0.7 if b.get('twist') else 0.5 if b.get('emotion') in ('shock', 'scared', 'sad', 'cry') else 0.26
+        nxt = beats[i + 1] if i + 1 < len(beats) else None
+        if nxt and nxt.get('place') and b.get('place') and nxt.get('place') != b.get('place'): g += 0.35    # a new place: a beat of air
     timing.append({'start': t, 'end': t + len(a) / SR, 'voice': src}); parts += [a, np.zeros(int(g * SR), np.float32)]; t += len(a) / SR + g
 parts.append(np.zeros(int(0.35 * SR), np.float32))
 voice = np.concatenate(parts); n = len(voice); secs = n / SR; tt = np.arange(n) / SR
@@ -106,11 +111,31 @@ for b, T in zip(beats, timing):
     elif sc == 'again': at(s - 0.7, 'buzz', 0.4); at(e - 0.3, 'gasp', 0.3)
     elif sc == 'chapter': at(s, 'whoosh', 0.45); at(s + 0.35, 'ding', 1.0)
     elif sc == 'ask': at(s, 'pop', 0.25)
-    elif sc == 'outro': at(e - 0.2, 'cheer', 1.4)
+    elif sc == 'outro': at(e - 0.2, 'cheer', 1.4) if not TALE else at(s, 'ding', 1.0)
+    elif sc == 'cold': at(s - 0.1, 'sting', 1.4)
+    elif sc == 'intro': at(s - 0.2, 'whoosh', 0.4)
+    elif sc == 'lesson':
+        k = len((b.get('props') or {}).get('tips') or [])
+        for j in range(min(3, k)): at(s + 0.3 + j * max(1.2, (e - s) / max(1, k + 0.5)), 'pop', 0.25)
+    elif sc == 'line':
+        if b.get('twist'): at(s - 0.1, 'sting', 1.6)
+        elif b.get('shot') == 'phone': at(s - 0.45, 'buzz', 0.4)
+        elif b.get('emotion') in ('shock', 'scared') and b.get('shot') == 'close': at(s - 0.1, 'gasp', 0.3)
 
-# 3. music: four warm chords and a soft beat, quiet; silent at the tense moments
+# 3. music: four warm chords and a soft beat, quiet; silent at the tense moments. A real story (Install 22) gets music for
+# its genre: tense (a low minor pulse and a ticking clock), mystery (sparse, eerie minor notes), hope (warm, rising).
 music = np.zeros(n, np.float32); bar = 2.4
-for i, ch in enumerate([[220, 277.2, 329.6], [196, 246.9, 293.7], [174.6, 220, 261.6], [196, 246.9, 311.1]] * int(secs / 9.6 + 2)):
+MOOD = job.get('music') if TALE else None
+CHORDS = {'tense': [[110, 130.8, 164.8], [103.8, 130.8, 155.6], [98, 123.5, 146.8], [103.8, 123.5, 155.6]],
+          'mystery': [[146.8, 174.6, 220], [138.6, 174.6, 207.7], [130.8, 155.6, 196], [138.6, 164.8, 207.7]],
+          'hope': [[261.6, 329.6, 392], [220, 277.2, 329.6], [174.6, 220, 261.6], [196, 246.9, 293.7]]}
+if MOOD == 'tense':                                          # a ticking clock under everything
+    for p in range(0, n, int(0.5 * SR)):
+        q = min(n, p + int(0.03 * SR)); u = tt[p:q] - tt[p]; music[p:q] += (np.sin(2 * np.pi * 2200 * u) * np.exp(-u * 160) * 0.025).astype(np.float32)
+if MOOD == 'mystery':                                        # a lonely high note now and then
+    for p in range(int(1.2 * SR), n, int(4.8 * SR)):
+        q = min(n, p + int(1.6 * SR)); u = tt[p:q] - tt[p]; music[p:q] += (np.sin(2 * np.pi * 880 * u) * np.exp(-u * 2.2) * 0.03).astype(np.float32)
+for i, ch in enumerate((CHORDS.get(MOOD) or [[220, 277.2, 329.6], [196, 246.9, 293.7], [174.6, 220, 261.6], [196, 246.9, 311.1]]) * int(secs / 9.6 + 2)):
     s0 = int(i * bar * SR)
     if s0 >= n: break
     s1 = min(n, int((i + 1) * bar * SR) + int(0.4 * SR)); seg = tt[s0:s1] - tt[s0]; env = np.minimum(1, seg / 0.5) * np.exp(-seg * 0.35)

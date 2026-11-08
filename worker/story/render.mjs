@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { makeStory, W as SW, H as SH } from './scenes.mjs'
 import { makeWide, WW, WH } from './wide.mjs'
+import { makeTale, thumb, TW, TH } from './tale.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const arg = (k) => { const i = process.argv.indexOf('--' + k); return i > 0 ? process.argv[i + 1] : null }
@@ -24,6 +25,7 @@ const CSS = () => `@font-face{font-family:H;src:url(data:font/woff2;base64,${fon
 export function storyFor(job, variant) {
   const fb = variant === 'fb'
   const timing = JSON.parse(fs.readFileSync(fb ? 'work/story_fb.json' : 'work/story.json', 'utf8'))
+  if (job.kind === 'saga' && job.mode === 'tale') return { story: makeTale(job.story.beats, timing, job), timing, W: TW, H: TH, wav: 'work/story.wav', out: 'out/raw.mp4' }   // a real story (Install 22)
   if (job.kind === 'saga') {
     const n = (job.chapters || []).length
     const shots = Array.from({ length: n }, (_, k) => png(`public/shot_${k}.png`)), hosts = (job.chapters || []).map((c) => hostOf(c.site && c.site.url))
@@ -60,9 +62,22 @@ export async function render({ onProgress, variant = arg('variant') } = {}) {
     }))
   } finally { await b.close() }
   if (only) return { frames: only.length }
+  if (job.mode === 'tale' && !variant) await drawThumb(job)
   fs.mkdirSync('out', { recursive: true })
   execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-framerate', String(timing.fps), '-i', `${dir}/%05d.jpg`, '-i', wav, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-shortest', out])
   fs.rmSync(dir, { recursive: true, force: true })
   return { frames: N, seconds: timing.secs, width: W, height: H, out }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) render().then((r) => console.log('render:', JSON.stringify(r))).catch((e) => { console.error(e.message); process.exit(1) })
+
+// the thumbnail for a real story (out/thumb.jpg, 1280×720, under 2 MB as YouTube requires)
+export async function drawThumb(job) {
+  const { chromium } = await import('playwright'), b = await chromium.launch()
+  try {
+    const pg = await b.newPage({ viewport: { width: TW, height: TH } })
+    await pg.setContent(`<!doctype html><style>${CSS()}</style><svg width="${TW}" height="${TH}" viewBox="0 0 ${TW} ${TH}">${thumb(job)}</svg><div style="position:absolute;opacity:0"><span style="font-family:H">.</span><span style="font-family:Inter;font-weight:900">0</span></div>`)
+    await pg.evaluate(() => document.fonts.ready)
+    fs.mkdirSync('out', { recursive: true }); await pg.screenshot({ path: 'out/thumb.jpg', type: 'jpeg', quality: 88 })
+  } finally { await b.close() }
+  return 'out/thumb.jpg'
+}
