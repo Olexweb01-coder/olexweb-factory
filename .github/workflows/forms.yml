@@ -1,0 +1,30 @@
+# Started by the Olexweb admin when contact-form messages are due (Install 21). Sends a few, then stops.
+# Nothing secret travels in the inputs (runs of a public repo are visible); the worker proves itself with FACTORY_SECRET.
+name: forms
+run-name: contact forms
+on:
+  workflow_dispatch:
+    inputs:
+      api: { description: 'Admin address', required: true, default: 'https://olexweb.com' }
+concurrency: { group: forms, cancel-in-progress: false }
+permissions: { contents: read }
+jobs:
+  forms:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      OLEX_API: ${{ inputs.api }}
+      FACTORY_SECRET: ${{ secrets.FACTORY_SECRET }}
+    steps:
+      - name: Only the Olexweb admin's address is accepted
+        run: |
+          case "$OLEX_API" in https://olexweb.com|https://www.olexweb.com) ;; *) echo "Refusing to talk to $OLEX_API"; exit 1;; esac
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - name: Install
+        run: |
+          npm ci || npm install
+          npx playwright install --with-deps chromium
+      - name: Send the contact forms that are due
+        run: node worker/forms.mjs
