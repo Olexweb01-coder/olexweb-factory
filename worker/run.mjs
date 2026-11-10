@@ -24,6 +24,8 @@ function run(cmd, args, onLine) {                                          // a 
     p.on('close', (c) => (c === 0 ? res() : rej(new Error(`${path.basename(cmd)} failed: ${err.trim().split('\n').slice(-2).join(' ').slice(0, 200)}`)))) })
 }
 const STORYLIKE = (k) => k === 'story' || k === 'saga'
+// The explainer formats (worker/formats): 'versus' (Poor vs Rich) and 'build' (You build it). One narrator, drawn frames.
+const EXPLAIN = () => { try { return job().mode === 'explain' } catch { return false } }
 const probe = (f, what) => execFileSync('ffprobe', ['-v', 'error', ...what, '-of', 'csv=p=0', f]).toString().trim()
 
 async function film(url, clipPath, shotPath, label, n, of) {
@@ -75,6 +77,7 @@ const STEPS = {
   async job() {
     const j = await call(`/api/factory/job?id=${ID}`, {})
     fs.writeFileSync('work/job.json', JSON.stringify(j, null, 1))
+    if (j.mode === 'explain') { log(`job: explainer Short (${j.format}${j.world ? ', ' + j.world : ''}), ${(j.beats || []).length || 'its world’s'} lines: ${j.title}`); return }
     log(`job: ${j.kind === 'long' ? 'long video vol. ' + j.volume : j.kind === 'saga' ? (j.mode === 'tale' ? 'a real story, ' : 'long story, ') + (j.chapters || []).length + ' chapters' : j.kind === 'story' ? 'story Short' + (j.fb ? ' (+ Facebook version)' : '') : 'part ' + j.part}, ${STORYLIKE(j.kind) ? j.story.beats.length + ' beats' : j.scenes.length + ' scenes'}, ${j.mode === 'tale' ? (j.genre || 'story') + ', ' + (j.cast || []).length + ' characters' : j.site.url.replace(/^https?:\/\//, '').split('/')[0]}`)   // a real story has no website (Install 22)
   },
 
@@ -85,6 +88,8 @@ const STEPS = {
       const sites = (j.chapters || []).filter((c) => c.site), secs = {}
       for (const [i, c] of sites.entries()) secs[c.seg] = await film(c.site.url, `public/clip_${c.seg}.mp4`, `public/shot_${c.seg}.png`, `site ${i + 1} of ${sites.length}`, i, sites.length)
       fs.writeFileSync('work/capture.json', JSON.stringify({ clipSeconds: secs }))
+    } else if (j.mode === 'explain') {                                     // an explainer is drawn, nothing to film
+      log('capture: an explainer, nothing to film')
     } else if (j.kind === 'saga' && j.mode === 'tale') {                   // a real story films no websites (Install 22)
       log('capture: a story, nothing to film')
     } else if (j.kind === 'saga') {                                        // only the screenshot is used; a site that won't load leaves its frame blank, not the video
@@ -98,6 +103,15 @@ const STEPS = {
 
   async voice() {
     if (!fs.existsSync('models/kokoro-v1.0.onnx')) throw new Error('the Kokoro voice model is missing (the workflow downloads it into models/)')
+    if (EXPLAIN()) {                                                       // one narrator, no gaps, music and a whoosh on each step
+      const j = job()
+      if (j.format === 'build') { const { WORLDS } = await import('./formats/build.mjs'); if (!WORLDS[j.world]) throw new Error(`the factory has no drawing for "${j.world}" yet`); j.beats = WORLDS[j.world] }
+      fs.writeFileSync('work/fmt_job.json', JSON.stringify({ format: j.format, voice: j.voice || 'am_michael', speed: j.speed || 1.16, title: j.titleLines, biz: j.biz, beats: j.beats }))
+      await report(ID, { stage: 'voice', note: `the narrator reads ${j.beats.length} lines` })
+      await run('python3', ['worker/formats/voice.py'])
+      log(`voice: ${JSON.parse(fs.readFileSync('work/fmt.json', 'utf8')).secs.toFixed(1)}s`)
+      return
+    }
     if (STORYLIKE(job().kind)) {                                           // his voice: print → acting (Chatterbox) → mix with effects and music
       const j = job(), lines = [...j.story.beats, ...(j.fb && j.fb.ask ? [j.fb.ask] : [])].filter((b) => (b.text || '').trim()).length
       await report(ID, { stage: 'voice', note: `his voice print and ${lines} backup lines` })
@@ -123,13 +137,18 @@ const STEPS = {
   },
 
   async music() {
-    if (STORYLIKE(job().kind)) return                                      // the story mix already has its music and effects
+    if (STORYLIKE(job().kind) || EXPLAIN()) return                                      // the story mix already has its music and effects
     await report(ID, { stage: 'music', note: 'music bed and sound effects' })
     await run('python3', ['worker/sound.py'])
   },
 
   async render() {
-    if (STORYLIKE(job().kind)) {
+    if (EXPLAIN()) {
+      await report(ID, { stage: 'render', note: 'drawing the frames' })
+      const { render: drawFmt } = await import('./formats/render.mjs')
+      const r = await drawFmt({ onProgress: (f, n) => report(ID, { total: n, done: f, note: Math.round(100 * f / n) + '%' }) })
+      fs.copyFileSync('out/fmt.mp4', 'out/raw.mp4'); log(`render: ${r.frames} frames drawn`)
+    } else if (STORYLIKE(job().kind)) {
       await report(ID, { stage: 'render', note: 'drawing the frames' })
       const { render: drawStory } = await import('./story/render.mjs')
       const r = await drawStory({ variant: null, onProgress: (f, n) => report(ID, { total: n, done: f, note: Math.round(100 * f / n) + '%' }) })
